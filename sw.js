@@ -1,5 +1,5 @@
 /* QuickDo Service Worker — 讓主畫面圖示離線也能開啟 */
-const CACHE = 'quickdo-v2';
+const CACHE = 'quickdo-v4';
 const ASSETS = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './icon-maskable.png'];
 
 self.addEventListener('install', e => {
