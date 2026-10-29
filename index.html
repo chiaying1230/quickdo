@@ -354,7 +354,13 @@
   #log-sub{font-size:13px;color:var(--ink-soft);padding-top:2px}
   #log-card{background:var(--card);border-radius:14px;box-shadow:var(--shadow);padding:14px}
   #panel-log .timer{padding:12px 10px 12px 14px}
-  #panel-log #timer-clock{font-size:22px}
+  #panel-log .tclock{font-size:22px}
+  .timer+.timer{margin-top:6px}
+  .timer-all{display:flex;align-items:center;gap:8px;margin-top:6px;font-size:12.5px;color:var(--ink-soft);padding:0 2px}
+  .timer-all span{flex:1}
+  .tl-b{height:14px;bottom:auto}
+  .tl-b.live{opacity:.55;background-image:repeating-linear-gradient(45deg,rgba(255,255,255,.45) 0 4px,transparent 4px 8px) !important}
+  .lmulti{font-size:11px;color:var(--accent);font-weight:600}
   .tab.live::after{content:"";position:absolute;top:7px;right:calc(50% - 22px);width:7px;height:7px;border-radius:50%;background:var(--danger);animation:live 1.2s ease-in-out infinite}
   .log-head{display:flex;align-items:center;gap:8px;font-size:14.5px;font-weight:700}
   .log-head span{margin-left:auto;font-size:12.5px;font-weight:500;color:var(--ink-soft)}
@@ -369,7 +375,7 @@
   .dotlive{width:9px;height:9px;min-width:9px;border-radius:50%;background:var(--danger);animation:live 1.2s ease-in-out infinite}
   @keyframes live{50%{opacity:.25}}
   .timer .tt{flex:1;min-width:0;font-size:14px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  #timer-clock{font-variant-numeric:tabular-nums;font-weight:700;color:var(--accent)}
+  .tclock{font-variant-numeric:tabular-nums;font-weight:700;color:var(--accent)}
   .tl{position:relative;height:26px;background:var(--paper);border-radius:8px;margin:14px 0 3px;overflow:hidden}
   .tl-b{position:absolute;top:3px;bottom:3px;border-radius:5px;min-width:3px;opacity:.92}
   .tl-now{position:absolute;top:0;bottom:0;width:2px;background:var(--danger)}
@@ -557,7 +563,7 @@ const setSyncDot = s => document.getElementById('sync-dot').className = s;
 /* ===================== 狀態 ===================== */
 const TAG_COLORS = ['#4F46E5','#D97706','#0D9488','#DB2777','#7C3AED','#0891B2','#65A30D','#E11D48','#A16207','#475569'];
 const MOODS = ['😡','😞','😐','🙂','🤩'];
-let tasks=[], tags=[], goals=[], moods={}, memo={text:'',upd:0}, logs=[], timer=null, revealNext=true, logDay=null;
+let tasks=[], tags=[], goals=[], moods={}, memo={text:'',upd:0}, logs=[], timers=[], revealNext=true, logDay=null;
 let filter='all', view='today', searchQ='';
 let focusTs=null, weekTs=null, pendingPush=[], calMonth, lastAddedId=null, memoOpen=false;
 const openGroups=new Set();
@@ -900,7 +906,7 @@ function render(){
   document.body.classList.toggle('wide',view==='week');
   document.getElementById('right').classList.toggle('show-m',view==='cal');
   for(const b of document.querySelectorAll('.tab'))b.classList.toggle('on',b.dataset.v===view);
-  document.querySelector('.tab[data-v="log"]').classList.toggle('live',!!timer);
+  document.querySelector('.tab[data-v="log"]').classList.toggle('live',timers.length>0);
   if(view==='today'){document.getElementById('panel-focus').classList.add('show');renderFocus();}
   if(view==='log'){document.getElementById('panel-log').classList.add('show');renderLog();}
   if(view==='week'){document.getElementById('panel-week').classList.add('show');renderWeek();}
@@ -1095,7 +1101,7 @@ const liveLogs = () => logs.filter(l=>!l.deleted);
 const fmtHM = m => m<60?`${m}m`:`${Math.floor(m/60)}h${m%60?String(m%60).padStart(2,'0')+'m':''}`;
 const logColor = l => l.tag?tagColor(l.tag):'#94A3B8';
 const nowMin = () => { const d=new Date(); return d.getHours()*60+d.getMinutes(); };
-const logMins = day => liveLogs().filter(l=>l.day===day).reduce((s,l)=>s+(l.end-l.start),0);
+const logMins = day => unionMins(liveLogs().filter(l=>l.day===day));
 /* 「14:00-15:30 讀書 #課業」「9-10 早餐」「下午2-3 午睡」 */
 function parseLog(raw){
   let text=' '+raw.trim()+' ', tag=null;
@@ -1120,20 +1126,33 @@ function addLog(fields){
 async function persistLog(l){ await Local.set('logs',logs); queuePush(logRow(l)); }
 function logDone(l){ buzz([12,30,12]); chime(0); showPraise(`記下了 ✍️ ${fmtHM(l.end-l.start)}`); }
 
-function clockText(){ if(!timer)return''; const s=Math.max(0,Math.floor((Date.now()-timer.startMs)/1000)); return `${String(Math.floor(s/3600)).padStart(2,'0')}:${String(Math.floor(s/60)%60).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`; }
-setInterval(()=>{ const c=document.getElementById('timer-clock'); if(c&&timer)c.textContent=clockText(); },1000);
-/* 從背景切回來（滑走、鎖螢幕後）立刻更新；計時只存開始時間，所以離開多久都算得準 */
+/* 可以同時開好幾個計時（多工）；每個只存開始時間，所以滑走、鎖螢幕多久都算得準 */
+function clockText(t){ const s=Math.max(0,Math.floor((Date.now()-t.startMs)/1000)); return `${String(Math.floor(s/3600)).padStart(2,'0')}:${String(Math.floor(s/60)%60).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`; }
+setInterval(()=>{ for(const c of document.querySelectorAll('.tclock[data-start]'))c.textContent=clockText({startMs:+c.dataset.start}); },1000);
 document.addEventListener('visibilitychange',()=>{ if(!document.hidden&&view==='log')renderLog(); });
-async function startTimer(text,tag){ const d=new Date(); timer={text:text||'',tag:tag||null,startMs:d.getTime(),day:startOfDay(d)}; await Local.set('timer',timer); buzz(12); render(); }
-async function stopTimer(){
-  if(!timer)return;
-  const s=new Date(timer.startMs), e=new Date();
-  const start=s.getHours()*60+s.getMinutes(); let end=startOfDay(e)===timer.day?e.getHours()*60+e.getMinutes():1440; if(end<=start)end=start+1;
-  const l=addLog({day:timer.day,start,end,text:timer.text||'計時',tag:timer.tag});
-  timer=null; await Local.set('timer',null);
-  logDone(l); render(); renderQuick();
-  showToast(`已記錄 ${fmtTime(start)}–${fmtTime(end)} ${l.text}`,async()=>{ l.deleted=true; l.updated=Date.now(); render(); await persistLog(l); });
+async function saveTimers(){ await Local.set('timers',timers); }
+async function startTimer(text,tag){
+  const d=new Date();
+  timers.push({id:'t'+d.getTime()+Math.random().toString(36).slice(2,5),text:text||'',tag:tag||null,startMs:d.getTime(),day:startOfDay(d)});
+  await saveTimers(); buzz(12); render();
 }
+function timerToLog(t){
+  const s=new Date(t.startMs), e=new Date();
+  const start=s.getHours()*60+s.getMinutes(); let end=startOfDay(e)===t.day?e.getHours()*60+e.getMinutes():1440; if(end<=start)end=start+1;
+  return addLog({day:t.day,start,end,text:t.text||'計時',tag:t.tag});
+}
+async function stopTimers(ids){
+  const stopping=timers.filter(t=>ids.includes(t.id)); if(!stopping.length)return;
+  const made=stopping.map(timerToLog);
+  timers=timers.filter(t=>!ids.includes(t.id)); await saveTimers();
+  logDone(made[0]); render();
+  const msg=made.length===1?`已記錄 ${fmtTime(made[0].start)}–${fmtTime(made[0].end)} ${made[0].text}`:`已記錄 ${made.length} 筆計時`;
+  showToast(msg,async()=>{ for(const l of made){ l.deleted=true; l.updated=Date.now(); } render(); await Local.set('logs',logs); for(const l of made)queuePush(logRow(l)); });
+}
+
+/* 時段重疊時排成好幾條軌道；總時間用聯集算，同時做的不重複計 */
+function laneMap(list){ const ends=[], m=new Map(); for(const l of list){ let i=ends.findIndex(e=>e<=l.start); if(i<0){i=ends.length;ends.push(0);} ends[i]=l.end; m.set(l,i); } return {m,n:Math.max(1,ends.length)}; }
+function unionMins(list){ let tot=0,cs=0,ce=-1; for(const l of [...list].sort((a,b)=>a.start-b.start)){ if(l.start>ce){ if(ce>cs)tot+=ce-cs; cs=l.start; ce=l.end; } else ce=Math.max(ce,l.end); } if(ce>cs)tot+=ce-cs; return tot; }
 
 function renderLog(){
   if(logDay==null)logDay=todayTs();
@@ -1142,21 +1161,27 @@ function renderLog(){
   document.getElementById('log-date').textContent=`${isToday?'今天 ・ ':''}${dd.getMonth()+1}月${dd.getDate()}日 週${WD[dd.getDay()]}`;
   document.getElementById('log-sub').textContent=isToday?'零碎時間都花在哪？記下來就看得見':'補記或查看這天的時間';
   document.getElementById('log-today').style.display=isToday?'none':'';
-  const list=liveLogs().filter(l=>l.day===day).sort((a,b)=>a.start-b.start);
-  const total=list.reduce((s,l)=>s+(l.end-l.start),0);
+  const list=liveLogs().filter(l=>l.day===day).sort((a,b)=>a.start-b.start||a.end-b.end);
+  const real=unionMins(list), sum=list.reduce((s,l)=>s+(l.end-l.start),0), multi=sum-real;
   const lastEnd=list.length?Math.max(...list.map(l=>l.end)):null, nm=nowMin();
-  let r0=360; const r1=1440; for(const l of list)r0=Math.min(r0,Math.floor(l.start/60)*60);
-  const pct=m=>(m-r0)/(r1-r0)*100;
+  // 時間條：已記錄的 + 今天正在跑的計時（虛線）
+  const live=isToday?timers.filter(t=>t.day===day).map(t=>{ const s=new Date(t.startMs); return {start:s.getHours()*60+s.getMinutes(),end:Math.max(nm,s.getHours()*60+s.getMinutes()+1),text:t.text,tag:t.tag,live:true}; }):[];
+  const bars=[...list,...live].sort((a,b)=>a.start-b.start||a.end-b.end);
+  const {m:lane,n:lanes}=laneMap(bars);
+  let r0=360; const r1=1440; for(const b of bars)r0=Math.min(r0,Math.floor(b.start/60)*60);
+  const pct=x=>(x-r0)/(r1-r0)*100;
   const ticks=[]; for(let h=r0/60;h<=24;h+=3)ticks.push(h);
   const byTag={}; for(const l of list){ const k=l.tag||''; byTag[k]=(byTag[k]||0)+(l.end-l.start); }
-  card.innerHTML=`<div class="log-head">🕒 時間紀錄<span>${total?`${isToday?'今天':'這天'}記了 ${fmtHM(total)}`:'還沒有紀錄'}</span></div>
-    ${timer?`<div class="timer"><span class="dotlive"></span><span class="tt">${esc(timer.text||'計時中')}</span><span id="timer-clock">${clockText()}</span><button type="button" class="log-btn go" id="timer-stop">■ 結束</button></div>`:''}
-    <form class="log-form" id="log-form" autocomplete="off"><input id="log-in" placeholder="14:00-15:30 讀書 #課業" enterkeyhint="done" autocomplete="off"><button type="submit" class="log-btn">＋ 記</button>${timer?'':'<button type="button" class="log-btn go" id="log-start">▶ 計時</button>'}</form>
-    <div class="log-hint">${lastEnd!=null&&isToday&&lastEnd<nm?`<button type="button" class="log-fill" data-fill="${lastEnd}">↪ 接著記 ${fmtTime(lastEnd)}–${fmtTime(nm)}</button>`:'打「幾點-幾點 做什麼」按 ＋ 記；只打「做什麼」按 ▶ 就開始計時。'}</div>
-    ${list.length?`<div class="tl">${list.map(l=>`<div class="tl-b" style="left:${pct(l.start).toFixed(2)}%;width:${(pct(l.end)-pct(l.start)).toFixed(2)}%;background:${logColor(l)}" title="${fmtTime(l.start)}–${fmtTime(l.end)} ${esc(l.text)}"></div>`).join('')}${isToday&&nm>r0?`<div class="tl-now" style="left:${pct(nm).toFixed(2)}%"></div>`:''}</div>
-    <div class="tl-ticks">${ticks.map((h,i)=>`<span style="left:${pct(h*60).toFixed(2)}%;transform:translateX(${i===0?'0':h===24?'-100%':'-50%'})">${h}</span>`).join('')}</div>
-    <div class="log-sum">${Object.entries(byTag).sort((a,b)=>b[1]-a[1]).map(([k,m])=>`<span class="tag ${k?'user':'dur'}"${k?` style="background:${tagColor(k)}"`:''}>${k?'#'+esc(k):'未分類'} ${fmtHM(m)}</span>`).join('')}</div>
-    ${list.map(l=>`<div class="log-row" data-lid="${l.id}"><span class="lc" style="background:${logColor(l)}"></span><span class="lt">${fmtTime(l.start)}–${fmtTime(Math.min(l.end,1439))}</span><span class="lx">${esc(l.text||'（未命名）')}${l.tag?` <span class="ltag">#${esc(l.tag)}</span>`:''}</span><span class="ld">${fmtHM(l.end-l.start)}</span></div>`).join('')}`:''}`;
+  const overlaps=l=>list.some(o=>o!==l&&o.start<l.end&&l.start<o.end);
+  card.innerHTML=`<div class="log-head">🕒 時間紀錄<span>${real?`${isToday?'今天':'這天'}記了 ${fmtHM(real)}${multi?`（同時做 ${fmtHM(multi)}）`:''}`:'還沒有紀錄'}</span></div>
+    ${timers.map(t=>`<div class="timer" data-tid="${t.id}"><span class="dotlive"></span><span class="tt">${esc(t.text||'計時中')}${t.tag?` <span class="ltag">#${esc(t.tag)}</span>`:''}</span><span class="tclock" data-start="${t.startMs}">${clockText(t)}</span><button type="button" class="log-btn go t-stop">■ 結束</button></div>`).join('')}
+    ${timers.length>=2?`<div class="timer-all"><span>⇄ ${timers.length} 件事同時計時中</span><button type="button" class="log-btn t-stopall">全部結束</button></div>`:''}
+    <form class="log-form" id="log-form" autocomplete="off"><input id="log-in" placeholder="${timers.length?'同時還在做什麼？':'14:00-15:30 讀書 #課業'}" enterkeyhint="done" autocomplete="off"><button type="submit" class="log-btn">＋ 記</button><button type="button" class="log-btn go" id="log-start">▶ 計時</button></form>
+    <div class="log-hint">${lastEnd!=null&&isToday&&lastEnd<nm&&!timers.length?`<button type="button" class="log-fill" data-fill="${lastEnd}">↪ 接著記 ${fmtTime(lastEnd)}–${fmtTime(nm)}</button>`:'打「幾點-幾點 做什麼」按 ＋ 記；只打「做什麼」按 ▶ 計時。可以同時計好幾件事，時段重疊也沒關係。'}</div>
+    ${bars.length?`<div class="tl" style="height:${8+lanes*18}px">${bars.map(b=>`<div class="tl-b${b.live?' live':''}" style="left:${pct(b.start).toFixed(2)}%;width:${(pct(b.end)-pct(b.start)).toFixed(2)}%;top:${4+lane.get(b)*18}px;background:${logColor(b)}" title="${fmtTime(b.start)}–${b.live?'現在':fmtTime(b.end)} ${esc(b.text)}"></div>`).join('')}${isToday&&nm>r0?`<div class="tl-now" style="left:${pct(nm).toFixed(2)}%"></div>`:''}</div>
+    <div class="tl-ticks">${ticks.map((h,i)=>`<span style="left:${pct(h*60).toFixed(2)}%;transform:translateX(${i===0?'0':h===24?'-100%':'-50%'})">${h}</span>`).join('')}</div>`:''}
+    ${list.length?`<div class="log-sum">${Object.entries(byTag).sort((a,b)=>b[1]-a[1]).map(([k,x])=>`<span class="tag ${k?'user':'dur'}"${k?` style="background:${tagColor(k)}"`:''}>${k?'#'+esc(k):'未分類'} ${fmtHM(x)}</span>`).join('')}</div>
+    ${list.map(l=>`<div class="log-row" data-lid="${l.id}"><span class="lc" style="background:${logColor(l)}"></span><span class="lt">${fmtTime(l.start)}–${fmtTime(Math.min(l.end,1439))}</span><span class="lx">${esc(l.text||'（未命名）')}${l.tag?` <span class="ltag">#${esc(l.tag)}</span>`:''}${overlaps(l)?' <span class="lmulti">⇄ 同時</span>':''}</span><span class="ld">${fmtHM(l.end-l.start)}</span></div>`).join('')}`:''}`;
 }
 document.getElementById('log-prev').addEventListener('click',()=>{ logDay-=dayMs; revealNext=true; render(); });
 document.getElementById('log-next').addEventListener('click',()=>{ logDay+=dayMs; revealNext=true; render(); });
@@ -1171,7 +1196,8 @@ $logCard.addEventListener('submit',e=>{
 });
 $logCard.addEventListener('click',e=>{
   if(e.target.closest('#log-start')){ const p=parseLog(document.getElementById('log-in').value); startTimer(p.text,p.tag); return; }
-  if(e.target.closest('#timer-stop')){ stopTimer(); return; }
+  const st=e.target.closest('.t-stop'); if(st){ stopTimers([st.closest('.timer').dataset.tid]); return; }
+  if(e.target.closest('.t-stopall')){ stopTimers(timers.map(t=>t.id)); return; }
   const f=e.target.closest('[data-fill]'); if(f){ const inp=document.getElementById('log-in'); inp.value=`${fmtTime(+f.dataset.fill)}-${fmtTime(nowMin())} `; inp.focus(); return; }
   const row=e.target.closest('.log-row'); if(row){ const l=logs.find(x=>x.id===row.dataset.lid); if(l)openModal('log',l); }
 });
@@ -1575,7 +1601,7 @@ function openModal(kind,task){
       <h3>🏔️ 目標</h3><p>每個目標有「下一個動作」、里程碑步驟、相關待辦和筆記，進度自動計算。按「放進待辦」就把下一個動作變成一筆待辦。</p>
       <h3>☑ 檢查清單、備註、連結</h3><p>點任一筆待辦可以加檢查清單（像要帶的資料、要繳的表單…）、備註和連結。</p>
       <h3>😊 心情 ・ 🔥 連續天數</h3><p>「今天」頁可以記每天心情，日曆和週計畫上都看得到。每天完成一件事，連續天數 +1。</p>
-      <h3>🕒 計時</h3><p>「計時」分頁可以記零碎時間：打 <code>14:00-15:30 讀書 #課業</code> 按 ＋ 記，或只打「讀書」按 ▶ 開始計時、做完按 ■ 結束。會畫成一天的時間條，並依標籤加總。</p>
+      <h3>🕒 計時</h3><p>「計時」分頁可以記零碎時間：打 <code>14:00-15:30 讀書 #課業</code> 按 ＋ 記，或只打「讀書」按 ▶ 開始計時、做完按 ■ 結束。多工時可以同時開好幾個計時，重疊的時段會排成上下好幾條，總時間不會重複算。會畫成一天的時間條，並依標籤加總。</p>
       <h3>🎉 特效與徽章</h3><p>每完成一件事都有特效；90 秒內接連完成會觸發連擊。連續天數達標、今天全部做完會跳出徽章。音效可以在 ⚙ 關掉。</p>
       <h3>💾 匯入／匯出 ・ ☁️ 同步</h3><p>右上 ⚙ 可以匯出備份、匯入 Notion 轉出的檔案或舊版矩陣週計畫的資料，也能連接 Supabase 讓手機電腦同步。</p>
     </div><div class="modal-btns"><button class="primary" id="m-cancel">知道了</button></div>`;
@@ -1638,7 +1664,7 @@ function openModal(kind,task){
       t.updated=Date.now(); closeModal(); render(); await persist(t);
     };
     document.getElementById('m-del').onclick=async()=>{closeModal();await softDelete(t);};
-    document.getElementById('e-timer').onclick=async()=>{ if(timer&&!confirm('已經有一個計時在跑，要結束它並改計這件事嗎？'))return; if(timer)await stopTimer(); await startTimer(t.title,(t.tags||[])[0]); closeModal(); view='log'; logDay=todayTs(); revealNext=true; render(); scrollTo({top:0}); };
+    document.getElementById('e-timer').onclick=async()=>{ if(!timers.some(x=>x.text===t.title))await startTimer(t.title,(t.tags||[])[0]); closeModal(); view='log'; logDay=todayTs(); revealNext=true; render(); scrollTo({top:0}); };
   }
   else if(kind==='log'){
     const l=task;
@@ -1754,7 +1780,8 @@ document.getElementById('help-btn').addEventListener('click',()=>openModal('help
   moods=await Local.get('moods',{});
   memo=await Local.get('memo',{text:'',upd:0});
   logs=await Local.get('logs',[]);
-  timer=await Local.get('timer',null);
+  timers=await Local.get('timers',null);
+  if(!Array.isArray(timers)){ const old=await Local.get('timer',null); timers=old?[{id:'t'+old.startMs,...old}]:[]; }
   soundOn=await Local.get('sound',true);
   Cloud.cfg=await Local.get('settings',{url:'',key:''});
   await applyTheme(await Local.get('theme','light'));
